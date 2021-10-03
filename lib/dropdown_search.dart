@@ -18,10 +18,10 @@ export 'src/popup_safearea.dart';
 export 'src/scrollbar_props.dart';
 export 'src/text_field_props.dart';
 
-typedef Future<List<T>> DropdownSearchOnFind<T>(String? text);
+typedef Future DropdownSearchOnFind<T>(String? text);
 typedef String DropdownSearchItemAsString<T>(T? item);
-typedef bool DropdownSearchFilterFn<T>(T? item, String? filter);
-typedef bool DropdownSearchCompareFn<T>(T? item, T? selectedItem);
+typedef bool DropdownSearchFilterFunction<T>(T? item, String? filter);
+typedef bool DropdownSearchCompareFunction<T>(T? item, T? selectedItem);
 typedef Widget DropdownSearchBuilder<T>(BuildContext context, T? selectedItem);
 typedef Widget DropdownSearchBuilderMultiSelection<T>(
     BuildContext context, List<T> selectedItems);
@@ -55,23 +55,15 @@ typedef List<T> FavoriteItems<T>(List<T> items);
 enum Mode { DIALOG, BOTTOM_SHEET, MENU }
 
 class DropdownSearch<T> extends StatefulWidget {
-  ///DropDownSearch label
-  final String? label;
-
-  ///DropDownSearch hint
-  final String? hint;
 
   ///show/hide the search box
   final bool showSearchBox;
-
-  ///true if the filter on items is applied onlie (via API)
-  final bool isFilteredOnline;
 
   ///show/hide clear selected item
   final bool showClearButton;
 
   ///offline items list
-  final List<T>? items;
+  final List<T> items;
 
   ///selected item
   final T? selectedItem;
@@ -107,10 +99,13 @@ class DropdownSearch<T> extends StatefulWidget {
   final DropdownSearchItemAsString<T>? itemAsString;
 
   ///	custom filter function
-  final DropdownSearchFilterFn<T>? filterFn;
+  final DropdownSearchFilterFunction<T>? filterFunction;
 
   ///enable/disable dropdownSearch
   final bool enabled;
+
+  // Is data being loaded into items
+  final bool loading;
 
   ///MENU / DIALOG/ BOTTOM_SHEET
   final Mode mode;
@@ -125,7 +120,7 @@ class DropdownSearch<T> extends StatefulWidget {
   final bool showSelectedItems;
 
   ///function that compares two object with the same type to detected if it's the selected item or not
-  final DropdownSearchCompareFn<T>? compareFn;
+  final DropdownSearchCompareFunction<T>? compareFunction;
 
   ///dropdownSearch input decoration
   final InputDecoration? dropdownSearchDecoration;
@@ -144,6 +139,9 @@ class DropdownSearch<T> extends StatefulWidget {
 
   ///custom layout for loading items
   final LoadingBuilder? loadingBuilder;
+
+  /// If there is an error, this is not null
+  final dynamic error;
 
   ///custom layout for error
   final ErrorBuilder? errorBuilder;
@@ -271,11 +269,8 @@ class DropdownSearch<T> extends StatefulWidget {
     this.autoValidateMode = AutovalidateMode.disabled,
     this.onChanged,
     this.mode = Mode.DIALOG,
-    @Deprecated('Use labelText prop from dropdownSearchDecoration') this.label,
-    @Deprecated('Use hintText prop from dropdownSearchDecoration') this.hint,
-    this.isFilteredOnline = false,
     this.popupTitle,
-    this.items,
+    required this.items,
     this.selectedItem,
     this.onFind,
     this.dropdownBuilder,
@@ -284,14 +279,16 @@ class DropdownSearch<T> extends StatefulWidget {
     this.showClearButton = false,
     this.popupBackgroundColor,
     this.enabled = true,
+    this.loading = false,
     this.maxHeight,
-    this.filterFn,
+    this.filterFunction,
     this.itemAsString,
     this.showSelectedItems = false,
-    this.compareFn,
+    this.compareFunction,
     this.dropdownSearchDecoration,
     this.emptyBuilder,
     this.loadingBuilder,
+    this.error,
     this.errorBuilder,
     this.dialogMaxWidth,
     this.clearButton,
@@ -323,7 +320,7 @@ class DropdownSearch<T> extends StatefulWidget {
     this.selectionListViewProps = const SelectionListViewProps(),
     this.focusNode,
     this.positionCallback,
-  })  : assert(!showSelectedItems || T == String || compareFn != null),
+  })  : assert(!showSelectedItems || T == String || compareFunction != null),
         this.searchFieldProps = searchFieldProps ?? TextFieldProps(),
         this.isMultiSelectionMode = false,
         this.dropdownBuilderMultiSelection = null,
@@ -342,25 +339,24 @@ class DropdownSearch<T> extends StatefulWidget {
     Key? key,
     this.autoValidateMode = AutovalidateMode.disabled,
     this.mode = Mode.DIALOG,
-    @Deprecated('Use labelText prop from dropdownSearchDecoration') this.label,
-    @Deprecated('Use hintText prop from dropdownSearchDecoration') this.hint,
-    this.isFilteredOnline = false,
     this.popupTitle,
-    this.items,
+    required this.items,
     this.onFind,
     this.popupItemBuilder,
     this.showSearchBox = false,
     this.showClearButton = false,
     this.popupBackgroundColor,
     this.enabled = true,
+    this.loading = false,
     this.maxHeight,
-    this.filterFn,
+    this.filterFunction,
     this.itemAsString,
     this.showSelectedItems = false,
-    this.compareFn,
+    this.compareFunction,
     this.dropdownSearchDecoration,
     this.emptyBuilder,
     this.loadingBuilder,
+    this.error,
     this.errorBuilder,
     this.dialogMaxWidth,
     this.clearButton,
@@ -401,7 +397,7 @@ class DropdownSearch<T> extends StatefulWidget {
     this.selectionListViewProps = const SelectionListViewProps(),
     this.focusNode,
     this.positionCallback,
-  })  : assert(!showSelectedItems || T == String || compareFn != null),
+  })  : assert(!showSelectedItems || T == String || compareFunction != null),
         this.searchFieldProps = searchFieldProps ?? TextFieldProps(),
         this.onChangedMultiSelection = onChange,
         this.onSavedMultiSelection = onSaved,
@@ -596,9 +592,8 @@ class DropdownSearchState<T> extends State<DropdownSearch<T>> {
         .applyDefaults(Theme.of(state.context).inputDecorationTheme)
         .copyWith(
             enabled: widget.enabled,
-            labelText:
-                widget.label ?? widget.dropdownSearchDecoration?.labelText,
-            hintText: widget.hint ?? widget.dropdownSearchDecoration?.hintText,
+            labelText: widget.dropdownSearchDecoration?.labelText,
+            hintText: widget.dropdownSearchDecoration?.hintText,
             suffixIcon:
                 widget.showAsSuffixIcons ? _manageTrailingIcons() : null,
             errorText: state.errorText);
@@ -782,9 +777,8 @@ class DropdownSearchState<T> extends State<DropdownSearch<T>> {
     return SelectionWidget<T>(
       popupTitle: widget.popupTitle,
       maxHeight: widget.maxHeight ?? defaultHeight,
-      isFilteredOnline: widget.isFilteredOnline,
       itemAsString: widget.itemAsString,
-      filterFn: widget.filterFn,
+      filterFunction: widget.filterFunction,
       items: widget.items,
       onFind: widget.onFind,
       showSearchBox: widget.showSearchBox,
@@ -792,7 +786,7 @@ class DropdownSearchState<T> extends State<DropdownSearch<T>> {
       selectedValues: getSelectedItems,
       onChanged: _handleOnChangeSelectedItem,
       showSelectedItems: widget.showSelectedItems,
-      compareFn: widget.compareFn,
+      compareFunction: widget.compareFunction,
       emptyBuilder: widget.emptyBuilder,
       loadingBuilder: widget.loadingBuilder,
       errorBuilder: widget.errorBuilder,

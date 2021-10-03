@@ -185,10 +185,9 @@ class _MyHomePageState extends State<MyHomePage> {
                 ),
                 mode: Mode.BOTTOM_SHEET,
                 maxHeight: 700,
-                isFilteredOnline: true,
                 showClearButton: true,
                 showSelectedItems: true,
-                compareFn: (item, selectedItem) => item?.id == selectedItem?.id,
+                compareFunction: (item, selectedItem) => item?.id == selectedItem?.id,
                 showSearchBox: true,
                 dropdownSearchDecoration: InputDecoration(
                   labelText: 'User *',
@@ -215,7 +214,7 @@ class _MyHomePageState extends State<MyHomePage> {
               ///custom itemBuilder and dropDownBuilder
               DropdownSearch<UserModel>(
                 showSelectedItems: true,
-                compareFn: (i, s) => i?.isEqual(s) ?? false,
+                compareFunction: (i, s) => i?.isEqual(s) ?? false,
                 dropdownSearchDecoration: InputDecoration(
                   labelText: "Person",
                   contentPadding: EdgeInsets.fromLTRB(12, 12, 0, 0),
@@ -290,7 +289,7 @@ class _MyHomePageState extends State<MyHomePage> {
               DropdownSearch<UserModel>(
                 showSelectedItems: true,
                 showSearchBox: true,
-                compareFn: (i, s) => i?.isEqual(s) ?? false,
+                compareFunction: (i, s) => i?.isEqual(s) ?? false,
                 dropdownSearchDecoration: InputDecoration(
                   labelText: "Person with favorite option",
                   contentPadding: EdgeInsets.fromLTRB(12, 12, 0, 0),

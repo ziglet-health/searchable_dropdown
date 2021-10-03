@@ -12,28 +12,34 @@ import 'checkbox_widget.dart';
 
 class SelectionWidget<T> extends StatefulWidget {
   final List<T> selectedValues;
-  final List<T>? items;
+  final List<T> items;
   final bool showSearchBox;
   final bool isFilteredOnline;
   final ValueChanged<List<T>>? onChanged;
   final DropdownSearchOnFind<T>? onFind;
   final DropdownSearchPopupItemBuilder<T>? itemBuilder;
   final DropdownSearchItemAsString<T>? itemAsString;
-  final DropdownSearchFilterFn<T>? filterFn;
+  final DropdownSearchFilterFunction<T>? filterFunction;
   final String? hintText;
 
   final double? maxHeight;
   final double? dialogMaxWidth;
   final Widget? popupTitle;
   final bool showSelectedItems;
-  final DropdownSearchCompareFn<T>? compareFn;
+  final DropdownSearchCompareFunction<T>? compareFunction;
   final DropdownSearchPopupItemEnabled<T>? itemDisabled;
 
   ///custom layout for empty results
   final EmptyBuilder? emptyBuilder;
 
+  /// Is data being loaded
+  final bool loading;
+
   ///custom layout for loading items
   final LoadingBuilder? loadingBuilder;
+
+  /// Error if there is one
+  final dynamic error;
 
   ///custom layout for error
   final ErrorBuilder? errorBuilder;
@@ -85,7 +91,7 @@ class SelectionWidget<T> extends StatefulWidget {
   const SelectionWidget({
     Key? key,
     this.popupTitle,
-    this.items,
+    required this.items,
     this.maxHeight,
     this.showSearchBox = false,
     this.isFilteredOnline = false,
@@ -95,11 +101,13 @@ class SelectionWidget<T> extends StatefulWidget {
     this.itemBuilder,
     this.hintText,
     this.itemAsString,
-    this.filterFn,
+    this.filterFunction,
     this.showSelectedItems = false,
-    this.compareFn,
+    this.compareFunction,
     this.emptyBuilder,
+    this.loading = false,
     this.loadingBuilder,
+    this.error,
     this.errorBuilder,
     this.dialogMaxWidth,
     this.itemDisabled,
@@ -125,12 +133,12 @@ class SelectionWidget<T> extends StatefulWidget {
 }
 
 class _SelectionWidgetState<T> extends State<SelectionWidget<T>> {
-  // final FocusNode focusNode = new FocusNode();
-  final StreamController<List<T>> _itemsStream = StreamController.broadcast();
   final ValueNotifier<bool> _loadingNotifier = ValueNotifier(false);
-  final List<T> _syncItems = [];
   final ValueNotifier<List<T>> _selectedItemsNotifier = ValueNotifier([]);
   late Debouncer _debouncer;
+  String query = "";
+
+  final DropdownSearchFilterFunction<T> _defaultFilterFunction = (item,query) => item.toString().toLowerCase().contains((query ?? "").toLowerCase());
 
   List<T> get _selectedItems => _selectedItemsNotifier.value;
 
@@ -142,9 +150,7 @@ class _SelectionWidgetState<T> extends State<SelectionWidget<T>> {
 
     Future.delayed(
       Duration.zero,
-      () => _manageItemsByFilter(
-          widget.searchFieldProps?.controller?.text ?? '',
-          isFistLoad: true),
+      () => _manageItemsByFilter(widget.searchFieldProps?.controller?.text ?? ''),
     );
   }
 
@@ -157,7 +163,6 @@ class _SelectionWidgetState<T> extends State<SelectionWidget<T>> {
 
   @override
   void dispose() {
-    _itemsStream.close();
     super.dispose();
   }
 
@@ -182,25 +187,12 @@ class _SelectionWidgetState<T> extends State<SelectionWidget<T>> {
           Expanded(
             child: Stack(
               children: <Widget>[
-                StreamBuilder<List<T>>(
-                  stream: _itemsStream.stream,
-                  builder: (context, snapshot) {
-                    if (snapshot.hasError) {
-                      return _errorWidget(snapshot.error);
-                    } else if (!snapshot.hasData) {
-                      return _loadingWidget();
-                    } else if (snapshot.data!.isEmpty) {
-                      if (widget.emptyBuilder != null)
-                        return widget.emptyBuilder!(
-                          context,
-                          widget.searchFieldProps?.controller?.text,
-                        );
-                      else
-                        return const Center(
-                          child: const Text("No data found"),
-                        );
-                    }
-                    return MediaQuery.removePadding(
+                widget.error != null ? _errorWidget(widget.error) :
+                widget.loading ? _loadingWidget() :
+                widget.items.isEmpty && widget.emptyBuilder != null ? widget.emptyBuilder!(context,widget.searchFieldProps?.controller?.text) :
+                const Center(child: const Text("No data found")),
+
+                    MediaQuery.removePadding(
                       removeBottom: true,
                       removeTop: true,
                       context: context,
@@ -243,19 +235,16 @@ class _SelectionWidgetState<T> extends State<SelectionWidget<T>> {
                               widget.selectionListViewProps.restorationId,
                           clipBehavior:
                               widget.selectionListViewProps.clipBehavior,
-                          itemCount: snapshot.data!.length,
+                          itemCount: widget.items.length,
                           itemBuilder: (context, index) {
-                            var item = snapshot.data![index];
+                            var item = widget.items[index];
                             return widget.isMultiSelectionMode
                                 ? _itemWidgetMultiSelection(item)
                                 : _itemWidgetSingleSelection(item);
                           },
                         ),
                       ),
-                    );
-                  },
-                ),
-                _loadingWidget()
+                    )
               ],
             ),
           ),
@@ -354,87 +343,26 @@ class _SelectionWidgetState<T> extends State<SelectionWidget<T>> {
         });
   }
 
-  void _onTextChanged(String filter) async {
-    _manageItemsByFilter(filter);
+  void _onTextChanged(String query) async {
+    setState(() => this.query = query);
   }
 
-  ///Function that filter item (online and offline) base on user filter
-  ///[filter] is the filter keyword
-  ///[isFirstLoad] true if it's the first time we load data from online, false other wises
-  void _manageItemsByFilter(String filter, {bool isFistLoad = false}) async {
+  List<T>? applyFilter(String? query) {
+    return widget.items.where((x) {
+      if (widget.filterFunction != null)
+        return (widget.filterFunction!(x, query));
+      else if(_defaultFilterFunction(x,query)) return true;
+      else if (widget.itemAsString != null) return widget.itemAsString!(x).toLowerCase().contains((query ?? "").toLowerCase());
+      return false;
+    }).toList();
+  }
+
+  /// Filter items based on the filter.
+  ///[query] is the filter keyword
+  void _manageItemsByFilter(String query) async {
     _loadingNotifier.value = true;
 
-    List<T> applyFilter(String? filter) {
-      return _syncItems.where((i) {
-        if (widget.filterFn != null)
-          return (widget.filterFn!(i, filter));
-        else if (i
-            .toString()
-            .toLowerCase()
-            .contains(filter?.toLowerCase() ?? 'null'))
-          return true;
-        else if (widget.itemAsString != null) {
-          return (widget.itemAsString!(i))
-              .toLowerCase()
-              .contains(filter?.toLowerCase() ?? 'null');
-        }
-        return false;
-      }).toList();
-    }
-
-    //load offline data for the first time
-    if (isFistLoad && widget.items != null) _syncItems.addAll(widget.items!);
-
-    //manage offline items
-    if (widget.onFind != null && (widget.isFilteredOnline || isFistLoad)) {
-      try {
-        final List<T> onlineItems = [];
-        onlineItems.addAll(await widget.onFind!(filter));
-
-        //Remove all old data
-        _syncItems.clear();
-        //add offline items
-        if (widget.items != null) {
-          _syncItems.addAll(widget.items!);
-          //if filter online we filter only local list based on entered keyword (filter)
-          if (widget.isFilteredOnline == true) {
-            var filteredLocalList = applyFilter(filter);
-            _syncItems.clear();
-            _syncItems.addAll(filteredLocalList);
-          }
-        }
-        //add new online items to list
-        _syncItems.addAll(onlineItems);
-
-        //don't filter data , they are already filtered online and local data are already filtered
-        if (widget.isFilteredOnline == true)
-          _addDataToStream(_syncItems);
-        else
-          _addDataToStream(applyFilter(filter));
-      } catch (e) {
-        _addErrorToStream(e);
-        //if offline items count > 0 , the error will be not visible for the user
-        //As solution we show it in dialog
-        if (widget.items != null && widget.items!.isNotEmpty) {
-          _showErrorDialog(e);
-          _addDataToStream(applyFilter(filter));
-        }
-      }
-    } else {
-      _addDataToStream(applyFilter(filter));
-    }
-
     _loadingNotifier.value = false;
-  }
-
-  void _addDataToStream(List<T> data) {
-    if (_itemsStream.isClosed) return;
-    _itemsStream.add(data);
-  }
-
-  void _addErrorToStream(Object error, [StackTrace? stackTrace]) {
-    if (_itemsStream.isClosed) return;
-    _itemsStream.addError(error, stackTrace);
   }
 
   Widget _itemWidgetSingleSelection(T item) {
@@ -483,10 +411,10 @@ class _SelectionWidgetState<T> extends State<SelectionWidget<T>> {
       widget.itemDisabled != null && (widget.itemDisabled!(item)) == true;
 
   /// selected item will be highlighted only when [widget.showSelectedItems] is true,
-  /// if our object is String [widget.compareFn] is not required , other wises it's required
+  /// if our object is String [widget.compareFunction] is not required , other wises it's required
   bool _isSelectedItem(T item) {
-    if (widget.compareFn != null)
-      return _selectedItems.where((i) => widget.compareFn!(item, i)).isNotEmpty;
+    if (widget.compareFunction != null)
+      return _selectedItems.where((i) => widget.compareFunction!(item, i)).isNotEmpty;
     else
       return _selectedItems.contains(item);
   }
@@ -578,15 +506,7 @@ class _SelectionWidgetState<T> extends State<SelectionWidget<T>> {
 
   Widget _favoriteItemsWidget() {
     if (widget.showFavoriteItems == true) {
-      return StreamBuilder<List<T>>(
-          stream: _itemsStream.stream,
-          builder: (context, snapshot) {
-            if (snapshot.hasData) {
-              return _buildFavoriteItems(widget.favoriteItems!(snapshot.data!));
-            } else {
-              return Container();
-            }
-          });
+      return widget.items.isNotEmpty ? _buildFavoriteItems(widget.favoriteItems!(widget.items)) : Container();
     }
 
     return Container();
